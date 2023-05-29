@@ -18,9 +18,16 @@
 #include <pthread.h>
 #include <termios.h>
 #include <assert.h>
+#include <signal.h>    /* signal name macros, and the signal() prototype */
 
 #include <serial.h>
 #include <tty.h>
+
+volatile sig_atomic_t done = 0;
+
+void handle_sigterm(int sig_num) {
+    done = 1;
+}
 
 typedef struct guest {
   int kvm_fd;
@@ -238,7 +245,7 @@ int guest_load(guest_t *g, const char *image_path, const char *initrd_path) {
     return 0;
 }
 
-void guest_exit(guest_t *g) {
+void guest_deinit(guest_t *g) {
     close(g->kvm_fd);
     close(g->vm_fd);
     close(g->vcpu_fd);
@@ -248,7 +255,7 @@ void guest_exit(guest_t *g) {
 int guest_run(guest_t *g) {
     int run_size = ioctl(g->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
     struct kvm_run *run = mmap(0, run_size, PROT_READ | PROT_WRITE, MAP_SHARED, g->vcpu_fd, 0);
-    while (1) {
+    while (!done) {
         if (ioctl(g->vcpu_fd, KVM_RUN, 0) < 0) {
             return guest_error(g, "kvm_run failed");
         }
@@ -273,33 +280,29 @@ int guest_run(guest_t *g) {
             return -1;
         }
     }
+
+    return 0;
 }
 
-tty_state_t tty_state;
-
-void tty_cleanup(void) {
-    tty_restore(STDIN_FILENO, tty_state);
-}
 
 void* thread1_func(void* arg) {
     serial_t *serial = (serial_t*) arg;
 
+    tty_state_t tty_state;
     if (tty_make_raw(STDIN_FILENO, &tty_state) < 0) {
         perror("failed to enable tty raw mode");
         exit(1);
     }
-
-    atexit(tty_cleanup);
 
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     if (fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) {
         perror("failed to set O_NONBLOCK flag on stdin");
     }
 
-    while (1) {
+    while (!done) {
         {
-            uint8_t buf[FIFO_LEN];
-            int res = read(STDIN_FILENO, buf, FIFO_LEN);
+            uint8_t buf[SERIAL_FIFO_LEN];
+            int res = read(STDIN_FILENO, buf, SERIAL_FIFO_LEN);
             if (res == 0) return NULL;
             if (res > 0) {
                 serial_write(serial, buf, res);
@@ -313,8 +316,8 @@ void* thread1_func(void* arg) {
         }
         
         {
-            uint8_t buf[FIFO_LEN];
-            int res = serial_read(serial, buf, FIFO_LEN);
+            uint8_t buf[SERIAL_FIFO_LEN];
+            int res = serial_read(serial, buf, SERIAL_FIFO_LEN);
             if (res == 0) return NULL;
             if (res > 0) {
                 write(STDOUT_FILENO, buf, res);
@@ -330,43 +333,49 @@ void* thread1_func(void* arg) {
         usleep(1000);
     }
 
+    tty_restore(STDIN_FILENO, tty_state);
+
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    int r;
-    guest_t vm;
-
-    queue_init(&serial_16550a.rx_queue, FIFO_LEN);
-    queue_init(&serial_16550a.tx_queue, 16);
-    serial_16550a.irq_arg = &vm;
-    serial_16550a.irq_line = kvm_irq_line;
+    guest_t guest;
     
-    r = guest_init(&vm);
-    if (r < 0) {
-        fprintf(stderr, "failed to initialize guest vm: %d, errno=%d\n", r, errno);
-        return 1;
+    signal(SIGTERM, handle_sigterm);
+
+    if (guest_init(&guest) < 0) {
+        perror("failed to initialize guest");
+        goto error0;
     }
 
-    r = guest_load(&vm, argv[1], argv[2]);
-    if (r < 0) {
-        fprintf(stderr, "failed to load guest image: %d, errno=%d\n", r, errno);
-        return 1;
+    if (serial_init(&serial_16550a, kvm_irq_line, &guest) < 0) {
+        perror("failed to initialize serial device");
+        goto error1;
+    }
+
+    if (guest_load(&guest, argv[1], argv[2]) < 0) {
+        perror("failed to load guest");
+        goto error2;
     }
 
     pthread_t thread1;
-    if (pthread_create( &thread1, NULL, thread1_func, &serial_16550a) != 0) {
+    if (pthread_create(&thread1, NULL, thread1_func, &serial_16550a) != 0) {
         perror("failed to create thread");
-        exit(1);
+        goto error2;
     }
 
-    guest_run(&vm);
-
-    printf("waiting for thread1 to exit");
+    guest_run(&guest);
 
     pthread_join(thread1, NULL);
-
-    guest_exit(&vm);
+    serial_deinit(&serial_16550a);
+    guest_deinit(&guest);
 
     return 0;
+
+error2:
+    serial_deinit(&serial_16550a);
+error1:
+    guest_deinit(&guest);
+error0:
+    return 1;
 }

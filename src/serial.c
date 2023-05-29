@@ -1,6 +1,8 @@
 #include <errno.h>
 #include <pthread.h>
+#include <unistd.h>
 
+#include <sys/eventfd.h>
 #include <linux/serial.h>
 #include <linux/serial_reg.h>
 
@@ -98,7 +100,8 @@ int serial_read(serial_t *dev, uint8_t *buf, size_t nbytes) {
     if (queue_size(&dev->tx_queue) == 0) {
         if (nread == 0) {
             errno = EAGAIN;
-            goto error;
+            pthread_mutex_unlock(&dev->mu);
+            return -1;
         } else {
             dev->regs.lsr |= UART_LSR_TEMT | UART_LSR_THRE;
         }
@@ -107,10 +110,6 @@ int serial_read(serial_t *dev, uint8_t *buf, size_t nbytes) {
     serial_update_irq(dev);
     pthread_mutex_unlock(&dev->mu);
     return nread;
-
-error:
-    pthread_mutex_unlock(&dev->mu);
-    return -1;
 }
 
 void serial_out(serial_t *dev, uint16_t port, uint8_t *data, size_t len) {
@@ -132,9 +131,15 @@ void serial_out(serial_t *dev, uint16_t port, uint8_t *data, size_t len) {
         
         if (queue_push(&dev->tx_queue, *data) == 0) {
             dev->regs.lsr &= ~UART_LSR_TEMT;
+            if (write(dev->eventfd, (void*) &(uint64_t){1}, sizeof(uint64_t)) < 0) {
+                // The number of unhandled events has exceeded 0xffffffffffffffff.
+                // We never expect this to happen under ordinary conditions, but it
+                // may indicate that the event loop is in deadlock.
+                // TODO: Add warning log if the eventfd has not been read.
+            }
         }
 
-        if (queue_size(&dev->tx_queue) >= FIFO_LEN / 2)
+        if (queue_size(&dev->tx_queue) >= SERIAL_FIFO_LEN / 2)
             dev->regs.lsr &= ~UART_LSR_THRE;
 
         break;
@@ -237,5 +242,50 @@ void serial_in(serial_t *dev, uint16_t port, uint8_t *data, size_t len) {
         break;
     }
     serial_update_irq(dev);
+    pthread_mutex_unlock(&dev->mu);
+}
+
+int serial_init(serial_t *dev, irq_line_func irq_line, irq_arg_t irq_arg) {
+    if (queue_init(&dev->rx_queue, SERIAL_FIFO_LEN) < 0) return -1;
+    if (queue_init(&dev->tx_queue, SERIAL_FIFO_LEN) < 0) return -1;
+    dev->irq_arg = irq_arg;
+    dev->irq_line = irq_line;
+    dev->eventfd = -1;
+    return 0;
+}
+
+void serial_deinit(serial_t *dev) {
+    queue_deinit(&dev->rx_queue);
+    queue_deinit(&dev->tx_queue);
+}
+
+int serial_open(serial_t *dev) {
+    pthread_mutex_lock(&dev->mu);
+    if (dev->eventfd != -1) {
+        errno = EBUSY;
+        pthread_mutex_unlock(&dev->mu);
+        return -1;
+    }
+
+    int res = eventfd(0, EFD_NONBLOCK);
+    if (res >= 0) {
+        dev->eventfd = res;
+    }
+
+    return res;
+    pthread_mutex_unlock(&dev->mu);
+}
+
+int serial_close(serial_t *dev, int fd) {
+    pthread_mutex_lock(&dev->mu);
+    if (dev->eventfd != fd) {
+        errno = EINVAL;
+        pthread_mutex_unlock(&dev->mu);
+        return -1;
+    }
+
+    int res = close(fd);
+    dev->eventfd = -1;
+    return res;
     pthread_mutex_unlock(&dev->mu);
 }

@@ -7,7 +7,7 @@
 #include <queue.h>
 #include <irq.h>
 
-#define FIFO_LEN 16
+#define SERIAL_FIFO_LEN 16
 
 /**
  * The serial_t device emulates a 16550A UART device. This is a commonly used
@@ -27,6 +27,8 @@
  */
 typedef struct serial {
     pthread_mutex_t mu;
+
+    int eventfd;
 
     // IRQ abstraction.
     irq_line_func irq_line;
@@ -55,6 +57,14 @@ typedef struct serial {
 } serial_t;
 
 extern serial_t serial_16550a;
+
+int serial_init(serial_t *dev, irq_line_func irq_line, irq_arg_t irq_arg);
+
+void serial_deinit(serial_t *dev);
+
+int serial_open(serial_t *dev);
+
+int serial_close(serial_t *dev, int fd);
 
 /**
  * serial_read reads up to `count` bytes from the tx queue of the serial
