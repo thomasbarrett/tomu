@@ -7,7 +7,7 @@ TEST_FILES = $(join $(dir $(addprefix bin/tests/,$(FILES))), $(addprefix test_,$
 VERSION = v0.1.0
 
 .PHONY: all
-all: bin/example bin/guest $(TESTS)
+all: bin/example bin/guest0 $(TESTS)
 	
 .PHONY: clean
 clean:
@@ -25,11 +25,11 @@ bin/tests/%: tests/%.c $(OBJ_FILES)
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) $^ -o $@
 
-obj/guest.o: main/guest.S
+obj/guest0.o: main/guest0.S
 	@mkdir -p $(dir $@)
 	@as -32 $^ -o $@
 
-bin/guest: obj/guest.o
+bin/guest0: obj/guest0.o
 	@mkdir -p $(dir $@)
 	@ld -m elf_i386 --oformat binary -N -e _start -Ttext 0x10000 -o $@ $^
 

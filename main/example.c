@@ -1,5 +1,7 @@
 #define _GNU_SOURCE
 #include <asm/bootparam.h>
+
+
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/kvm.h>
@@ -13,17 +15,16 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <termios.h>
+#include <assert.h>
+
+#include <serial.h>
 
 #define GUEST_MEMORY_SIZE (1ULL << 30)
 #define KERNEL_CMDLINE_ADDR 0x20000
-struct guest {
-  int kvm_fd;
-  int vm_fd;
-  int vcpu_fd;
-  void *mem;
-};
 
-static int guest_error(struct guest *g, const char *fmt, ...) {
+static int guest_error(guest_t *g, const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
   vfprintf(stderr, fmt, args);
@@ -32,7 +33,7 @@ static int guest_error(struct guest *g, const char *fmt, ...) {
   return -1;
 }
 
-static int guest_init_regs(struct guest *g) {
+static int guest_init_regs(guest_t *g) {
   struct kvm_regs regs;
   struct kvm_sregs sregs;
   if (ioctl(g->vcpu_fd, KVM_GET_SREGS, &(sregs)) < 0) {
@@ -85,7 +86,7 @@ static int guest_init_regs(struct guest *g) {
   return 0;
 }
 
-static int guest_init_cpu_id(struct guest *g) {
+static int guest_init_cpu_id(guest_t *g) {
   struct {
     uint32_t nent;
     uint32_t padding;
@@ -107,63 +108,63 @@ static int guest_init_cpu_id(struct guest *g) {
   return 0;
 }
 
-int guest_init(struct guest *g) {
-  if ((g->kvm_fd = open("/dev/kvm", O_RDWR)) < 0) {
-    return guest_error(g, "failed to open /dev/kvm");
-  }
+int guest_init(guest_t *g) {
+    if ((g->kvm_fd = open("/dev/kvm", O_RDWR)) < 0) {
+        return guest_error(g, "failed to open /dev/kvm");
+    }
 
-  if ((g->vm_fd = ioctl(g->kvm_fd, KVM_CREATE_VM, 0)) < 0) {
-    return guest_error(g, "failed to create vm");
-  }
+    if ((g->vm_fd = ioctl(g->kvm_fd, KVM_CREATE_VM, 0)) < 0) {
+        return guest_error(g, "failed to create vm");
+    }
 
-  if (ioctl(g->vm_fd, KVM_SET_TSS_ADDR, 0xffffd000) < 0) {
-    return guest_error(g, "failed to set tss addr");
-  }
+    if (ioctl(g->vm_fd, KVM_SET_TSS_ADDR, 0xffffd000) < 0) {
+        return guest_error(g, "failed to set tss addr");
+    }
 
-  __u64 map_addr = 0xffffc000;
-  if (ioctl(g->vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr) < 0) {
-    return guest_error(g, "failed to set identity map addr");
-  }
+    __u64 map_addr = 0xffffc000;
+    if (ioctl(g->vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr) < 0) {
+        return guest_error(g, "failed to set identity map addr");
+    }
 
-  if (ioctl(g->vm_fd, KVM_CREATE_IRQCHIP, 0) < 0) {
-    return guest_error(g, "failed to create irq chip");
-  }
+    if (ioctl(g->vm_fd, KVM_CREATE_IRQCHIP, 0) < 0) {
+        return guest_error(g, "failed to create irq chip");
+    }
 
-  struct kvm_pit_config pit = {
-      .flags = 0,
-  };
-  if (ioctl(g->vm_fd, KVM_CREATE_PIT2, &pit) < 0) {
-    return guest_error(g, "failed to create i8254 interval timer");
-  }
+    struct kvm_pit_config pit = {
+        .flags = 0,
+    };
+    if (ioctl(g->vm_fd, KVM_CREATE_PIT2, &pit) < 0) {
+        return guest_error(g, "failed to create i8254 interval timer");
+    }
 
-  g->mem = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE,
+    g->mem = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  if (g->mem == NULL) {
-    return guest_error(g, "failed to mmap vm memory");
-  }
+    if (g->mem == NULL) {
+        return guest_error(g, "failed to mmap vm memory");
+    }
 
-  struct kvm_userspace_memory_region region = {
-      .slot = 0,
-      .flags = 0,
-      .guest_phys_addr = 0,
-      .memory_size = GUEST_MEMORY_SIZE,
-      .userspace_addr = (__u64)g->mem,
-  };
-  if (ioctl(g->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
-    return guest_error(g, "failed to set user memory region");
-  }
+    struct kvm_userspace_memory_region region = {
+        .slot = 0,
+        .flags = 0,
+        .guest_phys_addr = 0,
+        .memory_size = GUEST_MEMORY_SIZE,
+        .userspace_addr = (__u64)g->mem,
+    };
+    if (ioctl(g->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
+        return guest_error(g, "failed to set user memory region");
+    }
 
-  if ((g->vcpu_fd = ioctl(g->vm_fd, KVM_CREATE_VCPU, 0)) < 0) {
-    return guest_error(g, "failed to create vcpu");
-  }
+    if ((g->vcpu_fd = ioctl(g->vm_fd, KVM_CREATE_VCPU, 0)) < 0) {
+        return guest_error(g, "failed to create vcpu");
+    }
 
-  guest_init_regs(g);
-  guest_init_cpu_id(g);
+    guest_init_regs(g);
+    guest_init_cpu_id(g);
 
-  return 0;
+    return 0;
 }
 
-int guest_load(struct guest *g, const char *image_path, const char *initrd_path) {
+int guest_load(guest_t *g, const char *image_path, const char *initrd_path) {
     size_t datasz;
     void *data;
     int fd = open(image_path, O_RDONLY);
@@ -203,11 +204,11 @@ int guest_load(struct guest *g, const char *image_path, const char *initrd_path)
     munmap(data, datasz);
 
     /* load kernel command-line arguments */
-    void *cmdline = (void *)(((uint8_t *)g->mem) + KERNEL_CMDLINE_ADDR);
+    void *cmdline = (void *)(((uint8_t *) g->mem) + KERNEL_CMDLINE_ADDR);
     memset(cmdline, 0, boot->hdr.cmdline_size);
-    memcpy(cmdline, "console=ttyS0", 14);
+    memcpy(cmdline, "console=ttyS0,9600", 19);
 
-    /*  load initramfs to the highest 4k page-aligned address range */
+    /* load initramfs to the highest 4k page-aligned address range */
     size_t initramfs_addr = ((GUEST_MEMORY_SIZE - 1) - initramfs_size) & ~(0x0FFFULL);
     memcpy((uint8_t*) g->mem + initramfs_addr, initramfs, initramfs_size);
     boot->hdr.ramdisk_image = initramfs_addr;
@@ -217,32 +218,33 @@ int guest_load(struct guest *g, const char *image_path, const char *initrd_path)
     return 0;
 }
 
-void guest_exit(struct guest *g) {
+void guest_exit(guest_t *g) {
     close(g->kvm_fd);
     close(g->vm_fd);
     close(g->vcpu_fd);
     munmap(g->mem, GUEST_MEMORY_SIZE);
 }
 
-int guest_run(struct guest *g) {
+int guest_run(guest_t *g) {
     int run_size = ioctl(g->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
     struct kvm_run *run = mmap(0, run_size, PROT_READ | PROT_WRITE, MAP_SHARED, g->vcpu_fd, 0);
     while (1) {
         if (ioctl(g->vcpu_fd, KVM_RUN, 0) < 0) {
             return guest_error(g, "kvm_run failed");
         }
-
+        
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
-            if (run->io.port == 0x3f8 && run->io.direction == KVM_EXIT_IO_OUT) {
-                uint32_t size = run->io.size;
-                uint64_t offset = run->io.data_offset;
-                printf("%.*s", size * run->io.count, (char *)run + offset);
-            } else if (run->io.port == 0x3f8 + 5 && run->io.direction == KVM_EXIT_IO_IN) {
-                char *value = (char *)run + run->io.data_offset;
-                *value = 0x20;
+            {
+                uint8_t *data = (uint8_t *) run + run->io.data_offset;
+                size_t len = (size_t) run->io.count * run->io.size;
+                if (run->io.direction == KVM_EXIT_IO_OUT) {
+                    serial_out(&serial_16550a, run->io.port, data, len);
+                } else if (run->io.direction == KVM_EXIT_IO_IN) {
+                    serial_in(&serial_16550a, run->io.port, data, len);
+                }
+                break;
             }
-            break;
         case KVM_EXIT_SHUTDOWN:
             printf("guest exited: shutdown\n");
             return 0;
@@ -253,23 +255,104 @@ int guest_run(struct guest *g) {
     }
 }
 
+struct termios tty_state;
+
+void tty_disable_raw(void) {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_state);
+}
+
+void tty_enable_raw(void) {
+    tcgetattr(STDIN_FILENO, &tty_state);
+    atexit(tty_disable_raw);
+    struct termios raw = tty_state;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= ~(OPOST);
+    raw.c_cflag |= (CS8);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;
+
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+void* thread1_func(void* arg) {
+    serial_t *serial = (serial_t*) arg;
+    tty_enable_raw();
+
+    int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    if (fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) {
+        perror("failed to set O_NONBLOCK flag on stdin");
+    }
+
+    while (1) {
+        {
+            uint8_t buf[FIFO_LEN];
+            int res = read(STDIN_FILENO, buf, FIFO_LEN);
+            if (res == 0) return NULL;
+            if (res > 0) {
+                serial_write(serial, buf, res);
+            }
+            if (res < 0) {
+                if (errno != EAGAIN) {
+                    perror("failed to read stdin");
+                    exit(1);
+                }
+            }
+        }
+        
+        {
+            uint8_t buf[FIFO_LEN];
+            int res = serial_read(serial, buf, FIFO_LEN);
+            if (res == 0) return NULL;
+            if (res > 0) {
+                write(STDOUT_FILENO, buf, res);
+            }
+            if (res < 0) {
+                if (errno != EAGAIN) {
+                    perror("failed to read stdin");
+                    exit(1);
+                }
+            }
+        }
+       
+        usleep(1000);
+    }
+
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
-  int r;
-  struct guest vm;
+    int r;
+    guest_t vm;
 
-  r = guest_init(&vm);
-  if (r < 0) {
-    fprintf(stderr, "failed to initialize guest vm: %d, errno=%d\n", r, errno);
-    return 1;
-  }
+    queue_init(&serial_16550a.rx_queue, FIFO_LEN);
+    queue_init(&serial_16550a.tx_queue, 16);
+    serial_16550a.guest = &vm;
 
-  r = guest_load(&vm, argv[1], argv[2]);
-  if (r < 0) {
-    fprintf(stderr, "failed to load guest image: %d, errno=%d\n", r, errno);
-    return 1;
-  }
+    r = guest_init(&vm);
+    if (r < 0) {
+        fprintf(stderr, "failed to initialize guest vm: %d, errno=%d\n", r, errno);
+        return 1;
+    }
 
-  guest_run(&vm);
-  guest_exit(&vm);
-  return 0;
+    r = guest_load(&vm, argv[1], argv[2]);
+    if (r < 0) {
+        fprintf(stderr, "failed to load guest image: %d, errno=%d\n", r, errno);
+        return 1;
+    }
+
+    pthread_t thread1;
+    if (pthread_create( &thread1, NULL, thread1_func, &serial_16550a) != 0) {
+        perror("failed to create thread");
+        exit(1);
+    }
+
+    guest_run(&vm);
+
+    printf("waiting for thread1 to exit");
+
+    pthread_join(thread1, NULL);
+
+    guest_exit(&vm);
+
+    return 0;
 }
