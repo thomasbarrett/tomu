@@ -20,7 +20,7 @@
 #include <assert.h>
 
 #include <serial.h>
-
+#include <tty.h>
 
 typedef struct guest {
   int kvm_fd;
@@ -275,28 +275,21 @@ int guest_run(guest_t *g) {
     }
 }
 
-struct termios tty_state;
+tty_state_t tty_state;
 
-void tty_disable_raw(void) {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &tty_state);
-}
-
-void tty_enable_raw(void) {
-    tcgetattr(STDIN_FILENO, &tty_state);
-    atexit(tty_disable_raw);
-    struct termios raw = tty_state;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;
-
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+void tty_cleanup(void) {
+    tty_restore(STDIN_FILENO, tty_state);
 }
 
 void* thread1_func(void* arg) {
     serial_t *serial = (serial_t*) arg;
-    tty_enable_raw();
+
+    if (tty_make_raw(STDIN_FILENO, &tty_state) < 0) {
+        perror("failed to enable tty raw mode");
+        exit(1);
+    }
+
+    atexit(tty_cleanup);
 
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     if (fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) {
