@@ -2,10 +2,10 @@
 #define SERIAL_H
 
 #include <stdint.h>
-#include <queue.h>
-#include <guest.h>
-
 #include <pthread.h>
+
+#include <queue.h>
+#include <irq.h>
 
 #define FIFO_LEN 16
 
@@ -26,9 +26,12 @@
  * - /dev/ttyS3
  */
 typedef struct serial {
-    guest_t *guest;
     pthread_mutex_t mu;
-    uint8_t irq_state;
+
+    // IRQ abstraction.
+    irq_line_func irq_line;
+    irq_arg_t irq_arg;
+    int irq_state;
 
     // Writes to THR UART register push to FIFO queue.
     queue_t tx_queue;

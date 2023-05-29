@@ -25,6 +25,7 @@
         "ostream": "c",
         "guest.h": "c",
         "stdarg.h": "c",
-        "assert.h": "c"
+        "assert.h": "c",
+        "irq.h": "c"
     }
 }

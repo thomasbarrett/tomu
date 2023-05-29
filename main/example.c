@@ -21,6 +21,26 @@
 
 #include <serial.h>
 
+
+typedef struct guest {
+  int kvm_fd;
+  int vm_fd;
+  int vcpu_fd;
+  void *mem;
+} guest_t;
+
+void kvm_irq_line(uint16_t irq, int level, irq_arg_t irq_arg) {
+	guest_t *guest = (guest_t*) irq_arg;
+	struct kvm_irq_level irq_level;
+	irq_level.irq = irq;
+	irq_level.level = level ? 1 : 0;
+
+	if (ioctl(guest->vm_fd, KVM_IRQ_LINE, &irq_level) < 0) {
+		perror("KVM_IRQ_LINE ioctl");
+        exit(errno);
+    }
+}
+
 #define GUEST_MEMORY_SIZE (1ULL << 30)
 #define KERNEL_CMDLINE_ADDR 0x20000
 
@@ -326,8 +346,9 @@ int main(int argc, char *argv[]) {
 
     queue_init(&serial_16550a.rx_queue, FIFO_LEN);
     queue_init(&serial_16550a.tx_queue, 16);
-    serial_16550a.guest = &vm;
-
+    serial_16550a.irq_arg = &vm;
+    serial_16550a.irq_line = kvm_irq_line;
+    
     r = guest_init(&vm);
     if (r < 0) {
         fprintf(stderr, "failed to initialize guest vm: %d, errno=%d\n", r, errno);

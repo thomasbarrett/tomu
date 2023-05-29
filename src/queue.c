@@ -1,5 +1,6 @@
-#include <queue.h>
 #include <stdlib.h>
+
+#include <queue.h>
 
 int queue_init(queue_t *q, size_t capacity) {
     q->front = 0;

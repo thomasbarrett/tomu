@@ -1,5 +1,4 @@
 #include <errno.h>
-
 #include <pthread.h>
 
 #include <linux/serial.h>
@@ -41,11 +40,11 @@ void serial_update_irq(serial_t *dev) {
     if (!iir) {
 		dev->regs.iir = UART_IIR_NO_INT;
 		if (dev->irq_state)
-            kvm_irq_line(dev->guest, 4, 0);
+            dev->irq_line(4, 0, dev->irq_arg);
 	} else {
 		dev->regs.iir = iir;
 		if (!dev->irq_state)
-            kvm_irq_line(dev->guest, 4, 1);
+            dev->irq_line(4, 1, dev->irq_arg);
 	}
 	dev->irq_state = iir;
 }
