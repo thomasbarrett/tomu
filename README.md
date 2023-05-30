@@ -12,7 +12,7 @@ Currently, this project only supports direct kernel boot.
 ```
 
 ## Existing Device Support
-- serial
+- serial: the `serial_t` device emulates a 16550A UART device.
 ```
     epoll <──────── eventfd <─────╮
                                   │
@@ -24,8 +24,12 @@ Currently, this project only supports direct kernel boot.
 (nonblocking)  ╰──────────────╯
 ```
 
+## In Progress
+- phb: the `phb_t` device emulates a generic PCI host bridge.
+
 ## Future Device Support
 - virtio-blk
+- virtio-net
 - vfio
 
 ## Documentation

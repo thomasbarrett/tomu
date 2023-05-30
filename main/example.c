@@ -23,6 +23,7 @@
 
 #include <serial.h>
 #include <tty.h>
+#include <pci.h>
 
 volatile sig_atomic_t done = 0;
 
@@ -267,9 +268,15 @@ int guest_run(guest_t *g) {
                 uint8_t *data = (uint8_t *) run + run->io.data_offset;
                 size_t len = (size_t) run->io.count * run->io.size;
                 if (run->io.direction == KVM_EXIT_IO_OUT) {
-                    serial_out(&serial_16550a, run->io.port, data, len);
+                    if (run->io.port == PCI_CONFIG_ADDRESS || (run->io.port >= PCI_CONFIG_DATA && run->io.port < PCI_CONFIG_DATA + 4)) {
+                        phb_out(run->io.port, data, len);
+                    }
+                    else serial_out(&serial_16550a, run->io.port, data, len);
                 } else if (run->io.direction == KVM_EXIT_IO_IN) {
-                    serial_in(&serial_16550a, run->io.port, data, len);
+                    if (run->io.port == PCI_CONFIG_ADDRESS || (run->io.port >= PCI_CONFIG_DATA && run->io.port < PCI_CONFIG_DATA + 4)) {
+                        phb_in(run->io.port, data, len);
+                    }
+                    else serial_in(&serial_16550a, run->io.port, data, len);
                 }
                 break;
             }
