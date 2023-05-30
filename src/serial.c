@@ -272,8 +272,8 @@ int serial_open(serial_t *dev) {
         dev->eventfd = res;
     }
 
-    return res;
     pthread_mutex_unlock(&dev->mu);
+    return res;
 }
 
 int serial_close(serial_t *dev, int fd) {
@@ -286,6 +286,6 @@ int serial_close(serial_t *dev, int fd) {
 
     int res = close(fd);
     dev->eventfd = -1;
-    return res;
     pthread_mutex_unlock(&dev->mu);
+    return res;
 }

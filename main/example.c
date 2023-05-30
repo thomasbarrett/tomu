@@ -19,6 +19,7 @@
 #include <termios.h>
 #include <assert.h>
 #include <signal.h>    /* signal name macros, and the signal() prototype */
+#include <sys/epoll.h>
 
 #include <serial.h>
 #include <tty.h>
@@ -299,42 +300,81 @@ void* thread1_func(void* arg) {
         perror("failed to set O_NONBLOCK flag on stdin");
     }
 
+    int eventfd = serial_open(serial);
+    if (eventfd < 0) {
+        perror("failed to open serial console");
+        exit(1);
+    }
+
+    int epollfd = epoll_create1(0);
+    if (epollfd < 0) {
+        perror("epoll_create1");
+        exit(1);
+    }
+
+    struct epoll_event event;
+
+    event.events = EPOLLIN;
+    event.data.fd = eventfd;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, eventfd, &event) == -1) {
+        perror("epoll_ctl: eventfd");
+        exit(EXIT_FAILURE);
+    }
+
+    event.events = EPOLLIN;
+    event.data.fd = STDIN_FILENO;
+    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, STDIN_FILENO, &event) == -1) {
+        perror("epoll_ctl: stdin");
+        exit(EXIT_FAILURE);
+    }
+  
+    const size_t MAX_EVENTS = 8;
+    struct epoll_event events[MAX_EVENTS];
     while (!done) {
-        {
-            uint8_t buf[SERIAL_FIFO_LEN];
-            int res = read(STDIN_FILENO, buf, SERIAL_FIFO_LEN);
-            if (res == 0) return NULL;
-            if (res > 0) {
-                serial_write(serial, buf, res);
-            }
-            if (res < 0) {
-                if (errno != EAGAIN) {
-                    perror("failed to read stdin");
-                    exit(1);
-                }
-            }
+        int n = epoll_wait(epollfd, events, MAX_EVENTS, -1);
+        if (n == -1) {
+            perror("epoll_wait");
+            exit(1);
         }
         
-        {
-            uint8_t buf[SERIAL_FIFO_LEN];
-            int res = serial_read(serial, buf, SERIAL_FIFO_LEN);
-            if (res == 0) return NULL;
-            if (res > 0) {
-                write(STDOUT_FILENO, buf, res);
+        for (int i = 0; i < n; i++) {
+
+            if (events[i].data.fd == eventfd) {
+                uint8_t buf[SERIAL_FIFO_LEN];
+                int res = serial_read(serial, buf, SERIAL_FIFO_LEN);
+                if (res == 0) return NULL;
+                if (res > 0) {
+                    write(STDOUT_FILENO, buf, res);
+                }
+                if (res < 0) {
+                    if (errno != EAGAIN) {
+                        perror("failed to read stdin");
+                        exit(1);
+                    }
+                }
             }
-            if (res < 0) {
-                if (errno != EAGAIN) {
-                    perror("failed to read stdin");
-                    exit(1);
+
+            if (events[i].data.fd == STDIN_FILENO) {
+                uint8_t buf[SERIAL_FIFO_LEN];
+                int res = read(STDIN_FILENO, buf, SERIAL_FIFO_LEN);
+                if (res == 0) return NULL;
+                if (res > 0) {
+                    serial_write(serial, buf, res);
+                }
+                if (res < 0) {
+                    if (errno != EAGAIN) {
+                        perror("failed to read stdin");
+                        exit(1);
+                    }
                 }
             }
         }
-       
-        usleep(1000);
     }
 
     tty_restore(STDIN_FILENO, tty_state);
-
+    close(epollfd);
+    serial_close(serial, eventfd);
+    
     return NULL;
 }
 
