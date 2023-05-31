@@ -15,6 +15,15 @@ typedef struct phb {
     } regs;
 } phb_t;
 
+typedef struct pci_address {
+    uint16_t domain;
+    uint8_t bus;
+    uint8_t slot;
+    uint8_t function;
+} pci_address_t;
+
+void pbh_init();
+
 /**
  * phb_in reads `count` bytes from the IO `port` to `buf`.
  */

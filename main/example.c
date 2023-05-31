@@ -351,7 +351,7 @@ void* thread1_func(void* arg) {
                 int res = serial_read(serial, buf, SERIAL_FIFO_LEN);
                 if (res == 0) return NULL;
                 if (res > 0) {
-                    write(STDOUT_FILENO, buf, res);
+                   write(STDOUT_FILENO, buf, res);
                 }
                 if (res < 0) {
                     if (errno != EAGAIN) {
@@ -394,6 +394,8 @@ int main(int argc, char *argv[]) {
         perror("failed to initialize guest");
         goto error0;
     }
+
+    pbh_init();
 
     if (serial_init(&serial_16550a, kvm_irq_line, &guest) < 0) {
         perror("failed to initialize serial device");

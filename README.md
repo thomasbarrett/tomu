@@ -27,6 +27,11 @@ Currently, this project only supports direct kernel boot.
 ## In Progress
 - phb: the `phb_t` device emulates a generic PCI host bridge.
 
+```
+~ # lspci -nn
+00:00.0 Host bridge [0600]: Intel Corporation Device [8086:0d57]
+```
+
 ## Future Device Support
 - virtio-blk
 - virtio-net
