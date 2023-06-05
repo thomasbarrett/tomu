@@ -24,6 +24,8 @@
 #include <serial.h>
 #include <tty.h>
 #include <pci.h>
+#include <x86.h>
+#include <virtio-mmio.h>
 
 volatile sig_atomic_t done = 0;
 
@@ -31,11 +33,17 @@ void handle_sigterm(int sig_num) {
     done = 1;
 }
 
+typedef struct guest_memory_region {
+    uintptr_t guest_addr;
+    void* host_addr;
+    size_t size;
+} guest_memory_region_t;
+
 typedef struct guest {
   int kvm_fd;
   int vm_fd;
   int vcpu_fd;
-  void *mem;
+  guest_memory_region_t mem;
 } guest_t;
 
 void kvm_irq_line(uint16_t irq, int level, irq_arg_t irq_arg) {
@@ -166,18 +174,19 @@ int guest_init(guest_t *g) {
         return guest_error(g, "failed to create i8254 interval timer");
     }
 
-    g->mem = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (g->mem == NULL) {
+    g->mem.host_addr = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g->mem.host_addr == NULL) {
         return guest_error(g, "failed to mmap vm memory");
     }
+    g->mem.guest_addr = 0;
+    g->mem.size = GUEST_MEMORY_SIZE;
 
     struct kvm_userspace_memory_region region = {
         .slot = 0,
         .flags = 0,
-        .guest_phys_addr = 0,
-        .memory_size = GUEST_MEMORY_SIZE,
-        .userspace_addr = (__u64)g->mem,
+        .guest_phys_addr = g->mem.guest_addr,
+        .memory_size = g->mem.size,
+        .userspace_addr = (uintptr_t) g->mem.host_addr,
     };
     if (ioctl(g->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
         return guest_error(g, "failed to set user memory region");
@@ -216,8 +225,8 @@ int guest_load(guest_t *g, const char *image_path, const char *initrd_path) {
     size_t initramfs_size = st.st_size;
     close(fd);
 
-    struct boot_params *boot = (struct boot_params *) (((uint8_t *)g->mem) + 0x10000);
-    void *kernel = (void *)(((uint8_t *)g->mem) + 0x100000);
+    struct boot_params *boot = (struct boot_params *) (((uint8_t *)g->mem.host_addr) + 0x10000);
+    void *kernel = (void *)(((uint8_t *)g->mem.host_addr) + 0x100000);
 
     memset(boot, 0, sizeof(struct boot_params));
     memmove(boot, data, sizeof(struct boot_params));
@@ -233,13 +242,17 @@ int guest_load(guest_t *g, const char *image_path, const char *initrd_path) {
     munmap(data, datasz);
 
     /* load kernel command-line arguments */
-    void *cmdline = (void *)(((uint8_t *) g->mem) + KERNEL_CMDLINE_ADDR);
+    void *cmdline = (void *)(((uint8_t *) g->mem.host_addr) + KERNEL_CMDLINE_ADDR);
+    printf("command line size: %d\n",boot->hdr.cmdline_size);
     memset(cmdline, 0, boot->hdr.cmdline_size);
-    memcpy(cmdline, "console=ttyS0,9600", 19);
+    // virtio_mmio.device=4K@0xd0000000:5
+    // virtio_mmio.device=4096@<baseaddr>:<irq>[:<id>]
+    const char *cmdline_txt = "console=ttyS0,9600 virtio_mmio.device=512@0xc0000000:5";
+    memcpy(cmdline, cmdline_txt, strlen(cmdline_txt));
 
     /* load initramfs to the highest 4k page-aligned address range */
     size_t initramfs_addr = ((GUEST_MEMORY_SIZE - 1) - initramfs_size) & ~(0x0FFFULL);
-    memcpy((uint8_t*) g->mem + initramfs_addr, initramfs, initramfs_size);
+    memcpy((uint8_t*) g->mem.host_addr + initramfs_addr, initramfs, initramfs_size);
     boot->hdr.ramdisk_image = initramfs_addr;
     boot->hdr.ramdisk_size = initramfs_size;
     munmap(initramfs, initramfs_size);
@@ -251,8 +264,10 @@ void guest_deinit(guest_t *g) {
     close(g->kvm_fd);
     close(g->vm_fd);
     close(g->vcpu_fd);
-    munmap(g->mem, GUEST_MEMORY_SIZE);
+    munmap(g->mem.host_addr, GUEST_MEMORY_SIZE);
 }
+
+virtio_mmio_config_t virtio_config;
 
 int guest_run(guest_t *g) {
     int run_size = ioctl(g->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
@@ -283,6 +298,17 @@ int guest_run(guest_t *g) {
         case KVM_EXIT_SHUTDOWN:
             printf("guest exited: shutdown\n");
             return 0;
+        case KVM_EXIT_MMIO:
+            {
+                printf("mmio %d %08llx %08x\r\n", run->mmio.is_write, run->mmio.phys_addr, run->mmio.len);
+                fflush(stdout);
+                if (run->mmio.is_write) {
+                    virtio_mmio_write(&virtio_config, run->mmio.phys_addr, run->mmio.data, run->mmio.len);
+                } else {
+                    virtio_mmio_read(&virtio_config, run->mmio.phys_addr, run->mmio.data, run->mmio.len);
+                }
+                break;
+            }
         default:
             printf("guest exited: reason: %d\n", run->exit_reason);
             return -1;
@@ -291,7 +317,6 @@ int guest_run(guest_t *g) {
 
     return 0;
 }
-
 
 void* thread1_func(void* arg) {
     serial_t *serial = (serial_t*) arg;
@@ -388,6 +413,7 @@ void* thread1_func(void* arg) {
 int main(int argc, char *argv[]) {
     guest_t guest;
     
+
     signal(SIGTERM, handle_sigterm);
 
     if (guest_init(&guest) < 0) {
@@ -396,6 +422,7 @@ int main(int argc, char *argv[]) {
     }
 
     pbh_init();
+    virtio_mmio_config_init(&virtio_config, guest.mem.host_addr, kvm_irq_line, &guest);
 
     if (serial_init(&serial_16550a, kvm_irq_line, &guest) < 0) {
         perror("failed to initialize serial device");

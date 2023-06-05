@@ -22,7 +22,7 @@ typedef struct pci_address {
     uint8_t function;
 } pci_address_t;
 
-void pbh_init();
+void pbh_init(void);
 
 /**
  * phb_in reads `count` bytes from the IO `port` to `buf`.

@@ -34,7 +34,7 @@ pci_config_t phb_config = {0};
 
 #define PCI_BRIDGE_HOST       0x00
 
-void pbh_init() {
+void pbh_init(void) {
     phb_config.registers[0] = (DEVICE_ID_INTEL_VIRT_PHB << 16) | VENDOR_ID_INTEL;
     phb_config.registers[2] = (DEVICE_CLASS_BRIDGE << 24) | (PCI_BRIDGE_HOST << 16);
     phb_config.registers[3] = 0x00010000;
