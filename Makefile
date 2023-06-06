@@ -1,5 +1,5 @@
 CC=clang
-CFLAGS = -std=c11 -Wall -pedantic -Iinclude -Wall -O3
+CFLAGS = -std=c11 -Wall -pedantic -Iinclude -Wall -O3 -laio
 SRC_FILES = $(wildcard src/*.c)  $(wildcard src/*/*.c)
 FILES = $(basename $(SRC_FILES:src/%=%))
 OBJ_FILES = $(addprefix obj/,$(FILES:=.o))
@@ -7,7 +7,7 @@ TEST_FILES = $(join $(dir $(addprefix bin/tests/,$(FILES))), $(addprefix test_,$
 VERSION = v0.1.0
 
 .PHONY: all
-all: bin/example bin/guest0 $(TESTS)
+all: bin/example bin/bdev bin/guest0 $(TESTS)
 	
 .PHONY: clean
 clean:
@@ -34,6 +34,10 @@ bin/guest0: obj/guest0.o
 	@ld -m elf_i386 --oformat binary -N -e _start -Ttext 0x10000 -o $@ $^
 
 bin/example: main/example.c $(OBJ_FILES)
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) $^ -o $@
+
+bin/bdev: main/bdev.c $(OBJ_FILES)
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) $^ -o $@
 

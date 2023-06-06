@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 
 #include <sys/uio.h>
 
@@ -32,6 +33,10 @@ void virtio_mmio_config_init(virtio_mmio_config_t *cfg, void *mem, irq_line_func
     for (size_t i = 0; i < VIRTIO_QUEUE_COUNT; i++) {
         cfg->queues[i].num_max = VIRTIO_BLK_QUEUE_DEPTH;
     }
+    // if (bdev_init(&cfg->bdev, "/dev/nvme0n1") < 0) {
+    //     perror("failed to open block device\r\n");
+    //     exit(1);
+    // }
     virtio_mmio_add_feature(cfg, VIRTIO_F_VERSION_1);
     //virtio_mmio_add_feature(cfg, VIRTIO_BLK_F_MQ);
     // virtio_mmio_add_feature(cfg, VIRTIO_F_RING_PACKED);
@@ -123,7 +128,7 @@ void virtio_mmio_write(virtio_mmio_config_t *cfg, uintptr_t guest_phys_addr, voi
             break;
         case VIRTIO_MMIO_QUEUE_NOTIFY:
         {
-            uint32_t queue_id = *(uint32_t*)data;
+            //uint32_t queue_id = *(uint32_t*)data;
             virt_queue_t *queue = &cfg->queues[cfg->queue_sel];
             uintptr_t desc_table = ((uintptr_t) queue->desc_hi << 32 ) | queue->desc_lo;
             uintptr_t avail_ring = ((uintptr_t) queue->avail_hi << 32 ) | queue->avail_lo;
@@ -153,8 +158,8 @@ void virtio_mmio_write(virtio_mmio_config_t *cfg, uintptr_t guest_phys_addr, voi
                 uint32_t iter = buffer_id;
                 while (queue->vring.desc[iter].flags & VRING_DESC_F_NEXT) {
                     if (n == VIRTIO_BLK_QUEUE_DEPTH) {
-                        printf("invalid next\r\n");
-                        fflush(stdout);
+                        // printf("invalid next\r\n");
+                        // fflush(stdout);
                         exit(1);
                     }
 
@@ -175,7 +180,24 @@ void virtio_mmio_write(virtio_mmio_config_t *cfg, uintptr_t guest_phys_addr, voi
                     .iov_len = queue->vring.desc[iter].len
                 };
 
-                printf("completing io %d %d %d\r\n", buffer_id, n, iov[n -1].iov_len);
+                struct virtio_blk_outhdr* hdr = (struct virtio_blk_outhdr*) iov[0].iov_base;
+                switch (hdr->type) {
+                case VIRTIO_BLK_T_IN:
+                   // bdev_read(&cfg->bdev, iov[1].iov_base, iov[1].iov_len, hdr->sector * 512);
+                  //  printf("read [%04x] of size [%04x]\r\n", hdr->sector, iov[1].iov_len);
+                   // fflush(stdout);
+                    break;
+                case VIRTIO_BLK_T_OUT:
+                  //  bdev_write(&cfg->bdev, iov[1].iov_base, iov[1].iov_len, hdr->sector * 512);
+                   // printf("write [%04x] of size [%04x]\r\n", hdr->sector, iov[1].iov_len);
+                   // fflush(stdout);
+                    break;
+                default:
+                  //  printf("unknown blk io type %d\r\n", hdr->type);
+                  //  fflush(stdout);
+                  break;
+                }
+                //printf("completing io %d %d %d\r\n", buffer_id, n, iov[n - 1].iov_len);
                 fflush(stdout);
                 *((uint8_t*) iov[n - 1].iov_base) = VIRTIO_BLK_S_OK;
                 queue->vring.used->ring[queue->vring.used->idx] = (vring_used_elem_t) {

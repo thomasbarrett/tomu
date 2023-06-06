@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <linux/virtio_ring.h>
+#include <bdev.h>
 
 #define VIRTIO_MMIO_MAGIC 0x74726976
 #define VIRTIO_VERSION 0x2
@@ -47,10 +48,11 @@ typedef struct virtio_mmio_config {
     uint32_t driver_features[2];
     uint32_t driver_features_len;
     uint32_t interrupt_status;
-    
+
     irq_line_func irq_line;
     irq_arg_t irq_arg;
     uint32_t irq;
+    bdev_t bdev;
 } virtio_mmio_config_t;
 
 #define VIRTIO_MMIO_IO_SIZE	512
