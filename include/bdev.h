@@ -40,4 +40,6 @@ int bdev_queue_read(bdev_queue_t *queue, void *buf, size_t count, off_t offset, 
 
 int bdev_queue_write(bdev_queue_t *queue, void *buf, size_t count, off_t offset, bdev_cb_t cb);
 
+int bdev_queue_poll(bdev_queue_t *queue);
+
 #endif

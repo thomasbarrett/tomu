@@ -114,3 +114,22 @@ int bdev_queue_write(bdev_queue_t *queue, void *buf, size_t count, off_t offset,
 
     return 0;
 }
+
+int bdev_queue_poll(bdev_queue_t *queue) {
+    struct io_event cqe[128];
+    struct timespec timeout = (struct timespec) {
+        .tv_sec = 0,
+        .tv_nsec = 100000000
+    };
+    int res = io_getevents(queue->ctx, 1, 128, cqe, &timeout);
+    if (res < 0) {
+        errno = -res;
+        return -1;
+    }
+
+    for (int j = 0; j < res; j++) {
+        ((bdev_cb_t) cqe[j].data)(cqe[j].res);
+    }
+
+    return 0;
+}
